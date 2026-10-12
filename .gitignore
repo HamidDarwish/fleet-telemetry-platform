@@ -1,0 +1,14 @@
+# Java / Maven
+backend/target/
+*.class
+# Flutter
+mobile_app/.dart_tool/
+mobile_app/build/
+mobile_app/.flutter-plugins*
+mobile_app/.packages
+mobile_app/pubspec.lock
+# IDE
+.idea/
+.vscode/
+*.iml
+backend/data/
