@@ -1,12 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/live_service.dart';
+
+/// State of the live (WebSocket) connection shown in the header.
+enum LiveStatus { connecting, connected, offline }
 
 /// Holds the session and all data shown in the app; live updates change it in place.
 class AppState extends ChangeNotifier {
@@ -17,11 +21,15 @@ class AppState extends ChangeNotifier {
   Session? session;
   bool initializing = true;
   bool liveConnected = false;
+  LiveStatus liveStatus = LiveStatus.connecting;
+  bool loading = false;
   String? loadError;
+  ThemeMode themeMode = ThemeMode.light;
 
   List<Vehicle> vehicles = [];
   List<AlertItem> alerts = [];
   List<WorkOrder> workOrders = [];
+  List<RuleView> rules = [];
   Dashboard? dashboard;
 
   Timer? _timer;
@@ -32,6 +40,12 @@ class AppState extends ChangeNotifier {
 
   /// Called once at start: restores the saved login (FR-1.5).
   Future<void> restore() async {
+    try {
+      final t = await _storage.read(key: 'theme_mode');
+      if (t != null) {
+        themeMode = ThemeMode.values.firstWhere((m) => m.name == t, orElse: () => ThemeMode.light);
+      }
+    } catch (_) {}
     try {
       final saved = await _storage.read(key: 'session');
       if (saved != null) {
@@ -70,11 +84,23 @@ class AppState extends ChangeNotifier {
     api.token = null;
     session = null;
     liveConnected = false;
+    liveStatus = LiveStatus.connecting;
+    loading = false;
+    loadError = null;
     vehicles = [];
     alerts = [];
     workOrders = [];
+    rules = [];
     dashboard = null;
     notifyListeners();
+  }
+
+  Future<void> setThemeMode(ThemeMode mode) async {
+    themeMode = mode;
+    notifyListeners();
+    try {
+      await _storage.write(key: 'theme_mode', value: mode.name);
+    } catch (_) {}
   }
 
   // ---------- loading ----------
@@ -82,10 +108,15 @@ class AppState extends ChangeNotifier {
   Future<void> loadAll() async {
     final s = session;
     if (s == null) return;
+    loading = true;
+    notifyListeners();
     try {
       vehicles = await api.vehicles();
       alerts = await api.alerts();
-      if (s.isAdmin || s.isManager) dashboard = await api.dashboard();
+      if (s.isAdmin || s.isManager) {
+        dashboard = await api.dashboard();
+        await _loadRules();
+      }
       if (s.isManager || s.isTechnician) workOrders = await api.workOrders();
       loadError = null;
     } on ApiException catch (e) {
@@ -94,8 +125,20 @@ class AppState extends ChangeNotifier {
         return;
       }
       loadError = e.message;
+    } catch (_) {
+      loadError = 'The server sent data the app could not read.';
     }
+    loading = false;
     notifyListeners();
+  }
+
+  /// Maintenance rules only enrich the dashboard, so a failure here must not hide the rest.
+  Future<void> _loadRules() async {
+    try {
+      rules = await api.rulesAll();
+    } on ApiException catch (e) {
+      if (e.status == 401) rethrow;
+    }
   }
 
   /// Light refresh of the numbers that change without a direct WebSocket message.
@@ -103,7 +146,10 @@ class AppState extends ChangeNotifier {
     final s = session;
     if (s == null) return;
     try {
-      if (s.isAdmin || s.isManager) dashboard = await api.dashboard();
+      if (s.isAdmin || s.isManager) {
+        dashboard = await api.dashboard();
+        await _loadRules();
+      }
       if (s.isManager || s.isTechnician) workOrders = await api.workOrders();
       notifyListeners();
     } on ApiException catch (e) {
@@ -114,11 +160,13 @@ class AppState extends ChangeNotifier {
   // ---------- live ----------
 
   void _startLive() {
+    liveStatus = LiveStatus.connecting;
     _live.connect(
       onTelemetry: _onTelemetry,
       onAlert: _onAlert,
       onStatus: (connected) {
         liveConnected = connected;
+        liveStatus = connected ? LiveStatus.connected : LiveStatus.offline;
         notifyListeners();
       },
     );

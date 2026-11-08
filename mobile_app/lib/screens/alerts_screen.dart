@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/app_state.dart';
+import '../theme/app_theme.dart';
 import '../widgets/common.dart';
+import '../widgets/state_views.dart';
+import '../widgets/ui.dart';
 
-/// FR-8.2, FR-8.5: alert list with acknowledge and a simple filter.
+/// FR-8.2, FR-8.5: alert list with acknowledge and filters.
 class AlertsScreen extends StatefulWidget {
   const AlertsScreen({super.key});
 
@@ -15,64 +18,119 @@ class AlertsScreen extends StatefulWidget {
 class _AlertsScreenState extends State<AlertsScreen> {
   bool _onlyOpen = false;
   String? _severity; // null = all
+  final Set<int> _busy = {};
+
+  Future<void> _acknowledge(int id, Future<void> Function() action) async {
+    setState(() => _busy.add(id));
+    try {
+      await action();
+    } catch (e) {
+      if (mounted) showMessage(context, '$e', error: true);
+    } finally {
+      if (mounted) setState(() => _busy.remove(id));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final items = state.alerts
+    final all = state.alerts;
+    final items = all
         .where((a) => !_onlyOpen || !a.acknowledged)
         .where((a) => _severity == null || a.severity == _severity)
         .toList();
+    int count(String s) => all.where((a) => a.severity == s).length;
 
-    return Column(
-      children: [
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: Row(
-            children: [
-              FilterChip(
-                label: const Text('Not acknowledged'),
-                selected: _onlyOpen,
-                onSelected: (v) => setState(() => _onlyOpen = v),
-              ),
-              const SizedBox(width: 8),
-              for (final s in ['CRITICAL', 'WARNING', 'INFO']) ...[
-                ChoiceChip(
-                  label: Text(pretty(s)),
-                  selected: _severity == s,
-                  onSelected: (v) => setState(() => _severity = v ? s : null),
+    Widget body;
+    if (all.isEmpty && state.loading) {
+      body = const ListSkeleton(count: 4);
+    } else if (all.isEmpty) {
+      body = EmptyState(
+        icon: state.loadError != null ? Icons.cloud_off_rounded : Icons.notifications_off_outlined,
+        title: state.loadError != null ? 'Could not load alerts' : 'No alerts',
+        message: state.loadError ?? 'You are all caught up. New alerts appear here in real time.',
+        actionLabel: state.loadError != null ? 'Retry' : null,
+        onAction: state.loadError != null ? state.loadAll : null,
+        color: state.loadError != null ? AppColors.error : AppColors.success,
+      );
+    } else if (items.isEmpty) {
+      body = EmptyState(
+        icon: Icons.filter_alt_off_rounded,
+        title: 'No alerts match',
+        message: 'Change or clear the filters to see more alerts.',
+        actionLabel: 'Clear filters',
+        onAction: () => setState(() {
+          _onlyOpen = false;
+          _severity = null;
+        }),
+      );
+    } else {
+      body = Column(
+        children: [
+          for (var i = 0; i < items.length; i++) ...[
+            AlertTile(
+              alert: items[i],
+              busy: _busy.contains(items[i].id),
+              onAcknowledge: () => _acknowledge(items[i].id, () => state.acknowledge(items[i])),
+            ),
+            if (i < items.length - 1) const SizedBox(height: 10),
+          ],
+        ],
+      );
+    }
+
+    return ResponsiveBody(
+      child: Column(
+        children: [
+          if (state.loadError != null && all.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: NoticeBanner(message: state.loadError!, onRetry: state.loadAll, retrying: state.loading),
+            ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                FilterPill(
+                  label: 'All',
+                  count: all.length,
+                  selected: _severity == null,
+                  onTap: () => setState(() => _severity = null),
                 ),
                 const SizedBox(width: 8),
-              ],
-            ],
-          ),
-        ),
-        Expanded(
-          child: RefreshIndicator(
-            onRefresh: state.loadAll,
-            child: items.isEmpty
-                ? ListView(children: const [Padding(padding: EdgeInsets.all(32), child: Center(child: Text('No alerts.')))])
-                : ListView.separated(
-                    itemCount: items.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (context, i) {
-                      final a = items[i];
-                      return AlertTile(
-                        alert: a,
-                        onAcknowledge: () async {
-                          try {
-                            await context.read<AppState>().acknowledge(a);
-                          } catch (e) {
-                            if (context.mounted) showMessage(context, '$e', error: true);
-                          }
-                        },
-                      );
-                    },
+                for (final s in ['CRITICAL', 'WARNING', 'INFO']) ...[
+                  FilterPill(
+                    label: pretty(s),
+                    count: count(s),
+                    color: severityColor(s),
+                    selected: _severity == s,
+                    onTap: () => setState(() => _severity = _severity == s ? null : s),
                   ),
+                  const SizedBox(width: 8),
+                ],
+                FilterPill(
+                  label: 'Not acknowledged',
+                  selected: _onlyOpen,
+                  color: AppColors.orange,
+                  onTap: () => setState(() => _onlyOpen = !_onlyOpen),
+                ),
+              ],
+            ),
           ),
-        ),
-      ],
+          const SizedBox(height: 12),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: state.loadAll,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                children: [body],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

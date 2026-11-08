@@ -236,3 +236,22 @@ class TechnicianInfo {
   factory TechnicianInfo.fromJson(Map<String, dynamic> j) =>
       TechnicianInfo((j['id'] as num).toInt(), (j['name'] ?? '') as String);
 }
+
+/// A user account as shown in the admin user list (read-only).
+class UserInfo {
+  final int id;
+  final String name;
+  final String email;
+  final String role;
+  final bool active;
+
+  UserInfo({required this.id, required this.name, required this.email, required this.role, required this.active});
+
+  factory UserInfo.fromJson(Map<String, dynamic> j) => UserInfo(
+        id: (j['id'] as num).toInt(),
+        name: (j['name'] ?? '') as String,
+        email: (j['email'] ?? '') as String,
+        role: (j['role'] ?? '') as String,
+        active: (j['active'] ?? true) as bool,
+      );
+}

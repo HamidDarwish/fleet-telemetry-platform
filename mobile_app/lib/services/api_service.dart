@@ -102,6 +102,18 @@ class ApiService {
     return j.map((e) => RuleView.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  /// All maintenance rules with their calculated status (admin and manager only).
+  Future<List<RuleView>> rulesAll() async {
+    final j = await _send('GET', '/maintenance-rules') as List;
+    return j.map((e) => RuleView.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// User accounts (admin only).
+  Future<List<UserInfo>> users() async {
+    final j = await _send('GET', '/users') as List;
+    return j.map((e) => UserInfo.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
   Future<Map<String, dynamic>> simulatorStatus() async =>
       (await _send('GET', '/simulator/status')) as Map<String, dynamic>;
 

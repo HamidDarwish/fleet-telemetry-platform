@@ -4,48 +4,174 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../providers/app_state.dart';
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/common.dart';
+import '../widgets/state_views.dart';
+import '../widgets/ui.dart';
+
+/// Work order summary card, also used in the vehicle maintenance history.
+class WorkOrderCard extends StatelessWidget {
+  final WorkOrder order;
+  final bool showVehicle;
+  final VoidCallback? onTap;
+  const WorkOrderCard({super.key, required this.order, this.showVehicle = true, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    final w = order;
+    final meta = [
+      if (showVehicle && w.plate.isNotEmpty) w.plate,
+      pretty(w.source),
+      w.assignedToName ?? 'Unassigned',
+    ].join(' · ');
+    return AppCard(
+      onTap: onTap,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              IconBadge(icon: Icons.build_rounded, color: workOrderStatusColor(w.status), size: 40),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(w.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 3),
+                    Text(meta,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12.5, color: p.textSecondary)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              StatusChip(label: pretty(w.status), color: workOrderStatusColor(w.status)),
+              const SizedBox(width: 8),
+              StatusChip(label: pretty(w.priority), color: priorityColor(w.priority), dot: false),
+              const Spacer(),
+              Icon(Icons.schedule_rounded, size: 14, color: p.textMuted),
+              const SizedBox(width: 4),
+              Text(timeAgo(w.createdAt), style: TextStyle(fontSize: 12, color: p.textSecondary)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 /// FR-7: work order list.
-class WorkOrdersScreen extends StatelessWidget {
+class WorkOrdersScreen extends StatefulWidget {
   const WorkOrdersScreen({super.key});
+
+  @override
+  State<WorkOrdersScreen> createState() => _WorkOrdersScreenState();
+}
+
+class _WorkOrdersScreenState extends State<WorkOrdersScreen> {
+  String? _status; // null = all
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final orders = state.workOrders;
-    return RefreshIndicator(
-      onRefresh: state.loadAll,
-      child: orders.isEmpty
-          ? ListView(children: const [Padding(padding: EdgeInsets.all(32), child: Center(child: Text('No work orders.')))])
-          : ListView.builder(
-              padding: const EdgeInsets.all(8),
-              itemCount: orders.length,
-              itemBuilder: (context, i) {
-                final w = orders[i];
-                return Card(
-                  child: ListTile(
-                    title: Text(w.title),
-                    subtitle: Text(
-                        '${w.plate} · ${pretty(w.source)} · ${w.assignedToName ?? 'unassigned'}\n${fmtTime(w.createdAt)}'),
-                    isThreeLine: true,
-                    trailing: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        StatusChip(label: pretty(w.status), color: w.status == 'COMPLETED' ? Colors.green : Colors.indigo),
-                        const SizedBox(height: 4),
-                        StatusChip(label: pretty(w.priority), color: priorityColor(w.priority)),
-                      ],
-                    ),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => WorkOrderDetailScreen(orderId: w.id)),
-                    ),
-                  ),
-                );
-              },
+    final all = state.workOrders;
+    final orders = all.where((w) => _status == null || w.status == _status).toList();
+    int count(String s) => all.where((w) => w.status == s).length;
+
+    Widget body;
+    if (all.isEmpty && state.loading) {
+      body = const ListSkeleton(count: 3);
+    } else if (all.isEmpty) {
+      body = EmptyState(
+        icon: state.loadError != null ? Icons.cloud_off_rounded : Icons.assignment_turned_in_outlined,
+        title: state.loadError != null ? 'Could not load work orders' : 'No work orders',
+        message: state.loadError ?? 'Work orders created by alerts or managers will be listed here.',
+        actionLabel: state.loadError != null ? 'Retry' : null,
+        onAction: state.loadError != null ? state.loadAll : null,
+        color: state.loadError != null ? AppColors.error : null,
+      );
+    } else if (orders.isEmpty) {
+      body = EmptyState(
+        icon: Icons.filter_alt_off_rounded,
+        title: 'No work orders with this status',
+        actionLabel: 'Show all',
+        onAction: () => setState(() => _status = null),
+      );
+    } else {
+      body = Column(
+        children: [
+          for (var i = 0; i < orders.length; i++) ...[
+            WorkOrderCard(
+              order: orders[i],
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => WorkOrderDetailScreen(orderId: orders[i].id)),
+              ),
             ),
+            if (i < orders.length - 1) const SizedBox(height: 10),
+          ],
+        ],
+      );
+    }
+
+    return ResponsiveBody(
+      child: Column(
+        children: [
+          if (state.loadError != null && all.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: NoticeBanner(message: state.loadError!, onRetry: state.loadAll, retrying: state.loading),
+            ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                FilterPill(
+                  label: 'All',
+                  count: all.length,
+                  selected: _status == null,
+                  onTap: () => setState(() => _status = null),
+                ),
+                const SizedBox(width: 8),
+                for (final s in ['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED']) ...[
+                  FilterPill(
+                    label: pretty(s),
+                    count: count(s),
+                    color: workOrderStatusColor(s),
+                    selected: _status == s,
+                    onTap: () => setState(() => _status = _status == s ? null : s),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: state.loadAll,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                children: [body],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -114,94 +240,137 @@ class _WorkOrderDetailScreenState extends State<WorkOrderDetailScreen> {
     final state = context.watch<AppState>();
     final matches = state.workOrders.where((x) => x.id == widget.orderId);
     if (matches.isEmpty) {
-      return Scaffold(appBar: AppBar(), body: const Center(child: Text('Work order not found')));
+      return Scaffold(
+        appBar: AppBar(),
+        body: const EmptyState(
+          icon: Icons.assignment_late_outlined,
+          title: 'Work order not found',
+          message: 'It may have been removed or reassigned.',
+        ),
+      );
     }
     final w = matches.first;
     final isManager = state.session!.isManager;
     final active = w.status == 'OPEN' || w.status == 'IN_PROGRESS';
 
+    final p = AppPalette.of(context);
+
     return Scaffold(
       appBar: AppBar(title: Text('Work order #${w.id}')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text(w.title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          Wrap(spacing: 8, children: [
-            StatusChip(label: pretty(w.status), color: Colors.indigo),
-            StatusChip(label: pretty(w.priority), color: priorityColor(w.priority)),
-            StatusChip(label: pretty(w.source), color: Colors.grey),
-          ]),
-          const SizedBox(height: 12),
-          InfoRow('Vehicle', w.plate),
-          InfoRow('Created', fmtTime(w.createdAt)),
-          InfoRow('Assigned to', w.assignedToName ?? 'unassigned'),
-          if (w.description.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(w.description, style: const TextStyle(color: Colors.black87)),
-          ],
-          const Divider(height: 32),
-          if (isManager && active) ...[
-            DropdownButtonFormField<int>(
-              value: _technicians.any((t) => t.id == _assignedId) ? _assignedId : null,
-              decoration: const InputDecoration(labelText: 'Assign to technician', border: OutlineInputBorder()),
-              items: [for (final t in _technicians) DropdownMenuItem(value: t.id, child: Text(t.name))],
-              onChanged: (v) => setState(() => _assignedId = v),
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: _busy || _assignedId == null
-                  ? null
-                  : () => _send({'assignedToId': _assignedId}, 'Technician assigned'),
-              child: const Text('Assign'),
-            ),
-            const SizedBox(height: 16),
-          ],
-          TextField(
-            controller: _notes,
-            enabled: active,
-            maxLines: 3,
-            decoration: const InputDecoration(labelText: 'Notes', border: OutlineInputBorder()),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _parts,
-            enabled: active,
-            decoration: const InputDecoration(labelText: 'Parts used', border: OutlineInputBorder()),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _cost,
-            enabled: active,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'Cost', border: OutlineInputBorder()),
-          ),
-          const SizedBox(height: 16),
-          if (active) ...[
-            OutlinedButton(
-              onPressed: _busy ? null : () => _send(_fields(), 'Saved'),
-              child: const Text('Save notes, parts and cost'),
-            ),
-            const SizedBox(height: 8),
-            if (w.status == 'OPEN')
-              FilledButton(
-                onPressed: _busy ? null : () => _send({..._fields(), 'status': 'IN_PROGRESS'}, 'Work started'),
-                child: const Text('Start work'),
+      body: SafeArea(
+        child: ResponsiveBody(
+          child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            children: [
+              AppCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(w.title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 10),
+                    Wrap(spacing: 8, runSpacing: 8, children: [
+                      StatusChip(label: pretty(w.status), color: workOrderStatusColor(w.status)),
+                      StatusChip(label: pretty(w.priority), color: priorityColor(w.priority), dot: false),
+                      StatusChip(label: pretty(w.source), color: AppColors.offline, dot: false),
+                    ]),
+                    const SizedBox(height: 12),
+                    InfoRow('Vehicle', w.plate),
+                    const Divider(height: 8),
+                    InfoRow('Created', fmtTime(w.createdAt)),
+                    const Divider(height: 8),
+                    InfoRow('Assigned to', w.assignedToName ?? 'unassigned'),
+                    if (w.description.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Text(w.description, style: TextStyle(color: p.textSecondary, height: 1.4)),
+                    ],
+                  ],
+                ),
               ),
-            if (w.status == 'IN_PROGRESS')
-              FilledButton(
-                onPressed: _busy ? null : () => _send({..._fields(), 'status': 'COMPLETED'}, 'Work order completed'),
-                child: const Text('Complete work order'),
+              if (isManager && active) ...[
+                const SizedBox(height: 16),
+                const SectionHeader(title: 'Assignment'),
+                AppCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      DropdownButtonFormField<int>(
+                        value: _technicians.any((t) => t.id == _assignedId) ? _assignedId : null,
+                        isExpanded: true,
+                        decoration: const InputDecoration(labelText: 'Assign to technician'),
+                        items: [for (final t in _technicians) DropdownMenuItem(value: t.id, child: Text(t.name))],
+                        onChanged: (v) => setState(() => _assignedId = v),
+                      ),
+                      const SizedBox(height: 12),
+                      OutlinedButton(
+                        onPressed: _busy || _assignedId == null
+                            ? null
+                            : () => _send({'assignedToId': _assignedId}, 'Technician assigned'),
+                        child: const Text('Assign'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              const SectionHeader(title: 'Work details'),
+              AppCard(
+                child: Column(
+                  children: [
+                    TextField(
+                      controller: _notes,
+                      enabled: active,
+                      maxLines: 3,
+                      decoration: const InputDecoration(labelText: 'Notes'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _parts,
+                      enabled: active,
+                      decoration: const InputDecoration(labelText: 'Parts used'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _cost,
+                      enabled: active,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Cost'),
+                    ),
+                  ],
+                ),
               ),
-            if (isManager) ...[
-              const SizedBox(height: 8),
-              TextButton(
-                onPressed: _busy ? null : () => _send({'status': 'CANCELLED'}, 'Work order cancelled'),
-                child: const Text('Cancel work order', style: TextStyle(color: Colors.red)),
-              ),
+              if (active) ...[
+                const SizedBox(height: 16),
+                OutlinedButton(
+                  onPressed: _busy ? null : () => _send(_fields(), 'Saved'),
+                  child: const Text('Save notes, parts and cost'),
+                ),
+                const SizedBox(height: 10),
+                if (w.status == 'OPEN')
+                  FilledButton(
+                    onPressed: _busy ? null : () => _send({..._fields(), 'status': 'IN_PROGRESS'}, 'Work started'),
+                    child: const Text('Start work'),
+                  ),
+                if (w.status == 'IN_PROGRESS')
+                  FilledButton(
+                    onPressed: _busy ? null : () => _send({..._fields(), 'status': 'COMPLETED'}, 'Work order completed'),
+                    child: const Text('Complete work order'),
+                  ),
+                if (isManager) ...[
+                  const SizedBox(height: 10),
+                  TextButton(
+                    onPressed: _busy ? null : () => _send({'status': 'CANCELLED'}, 'Work order cancelled'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppColors.error,
+                      minimumSize: const Size(0, 48),
+                    ),
+                    child: const Text('Cancel work order'),
+                  ),
+                ],
+              ],
             ],
-          ],
-        ],
+          ),
+        ),
       ),
     );
   }
